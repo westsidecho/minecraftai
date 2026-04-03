@@ -2,8 +2,7 @@
 Voice Listener for Minecraft AI Friends
 Captures microphone input, transcribes with OpenAI Whisper, sends to bots.
 
-Press V to toggle voice on/off. While on, it auto-detects when you stop
-talking and sends your message to Max & Luna.
+Hold V to talk, release to send your message to Max & Luna.
 """
 
 import json
@@ -119,12 +118,8 @@ def main():
     print("  Minecraft Voice Chat")
     print("==========================================")
     print()
-    print("  [V] = Toggle voice on/off")
+    print("  [V] = Hold to talk, release to send")
     print("  [Q] = Quit")
-    print()
-    print("  When voice is ON, just talk normally!")
-    print("  It auto-detects when you stop talking")
-    print("  and sends your message to Max & Luna.")
     print()
     print("  Connecting to MindServer...")
 
@@ -152,19 +147,13 @@ def main():
     )
     sample_width = pa.get_sample_size(FORMAT)
 
-    voice_on = False
     audio_frames = []
-    silent_chunks = 0
-    speaking = False
-    chunks_per_second = RATE / CHUNK
-    silence_chunks_needed = int(SILENCE_DURATION * chunks_per_second)
-
-    print()
-    print("  Voice is OFF. Press [V] to turn on.")
-    print()
-
-    # Track V key state to detect press (not hold)
     v_was_pressed = False
+    recording = False
+
+    print()
+    print("  Ready! Hold [V] to talk, release to send.")
+    print()
 
     try:
         while True:
@@ -173,69 +162,45 @@ def main():
                 print("\n  Quitting...")
                 break
 
-            # Toggle voice with V key (detect single press)
             v_pressed = keyboard.is_pressed("v")
+
+            # V key just pressed - start recording
             if v_pressed and not v_was_pressed:
-                voice_on = not voice_on
-                if voice_on:
-                    print("  ** VOICE ON ** - Talk normally! Press [V] to turn off.")
-                    audio_frames = []
-                    silent_chunks = 0
-                    speaking = False
+                recording = True
+                audio_frames = []
+                print("  ** RECORDING ** - Release [V] to send.")
+
+            # V key just released - stop recording and send
+            if not v_pressed and v_was_pressed and recording:
+                recording = False
+                if len(audio_frames) > MIN_AUDIO_CHUNKS:
+                    print("  [Processing...]")
+                    wav_path = save_audio(audio_frames, sample_width)
+                    text = transcribe_audio(wav_path)
+                    os.unlink(wav_path)
+                    if text:
+                        print(f'  You: "{text}"')
+                        send_to_bots(sio, text, bot_names)
+                    else:
+                        print("  (Could not understand)")
                 else:
-                    # Process any remaining audio
-                    if len(audio_frames) > MIN_AUDIO_CHUNKS:
-                        print("  [Processing...]")
-                        wav_path = save_audio(audio_frames, sample_width)
-                        text = transcribe_audio(wav_path)
-                        os.unlink(wav_path)
-                        if text:
-                            print(f'  You: "{text}"')
-                            send_to_bots(sio, text, bot_names)
-                    audio_frames = []
-                    print("  ** VOICE OFF ** - Press [V] to turn on.")
+                    print("  (Too short, ignored)")
+                audio_frames = []
+                print("  Ready! Hold [V] to talk.")
+
             v_was_pressed = v_pressed
 
-            if not voice_on:
+            if recording:
+                # Record audio while V is held
+                data = stream.read(CHUNK, exception_on_overflow=False)
+                audio_frames.append(data)
+            else:
                 # Drain mic buffer to avoid buildup
                 try:
                     stream.read(CHUNK, exception_on_overflow=False)
                 except:
                     pass
                 time.sleep(0.01)
-                continue
-
-            # Read audio
-            data = stream.read(CHUNK, exception_on_overflow=False)
-            volume = get_volume(data)
-
-            if volume > SILENCE_THRESHOLD:
-                # Sound detected
-                if not speaking:
-                    speaking = True
-                audio_frames.append(data)
-                silent_chunks = 0
-            else:
-                if speaking:
-                    audio_frames.append(data)
-                    silent_chunks += 1
-
-                    if silent_chunks >= silence_chunks_needed:
-                        # Silence detected after speech - send it
-                        if len(audio_frames) > MIN_AUDIO_CHUNKS:
-                            print("  [Processing...]")
-                            wav_path = save_audio(audio_frames, sample_width)
-                            text = transcribe_audio(wav_path)
-                            os.unlink(wav_path)
-                            if text:
-                                print(f'  You: "{text}"')
-                                send_to_bots(sio, text, bot_names)
-                            else:
-                                print("  (Could not understand)")
-
-                        audio_frames = []
-                        silent_chunks = 0
-                        speaking = False
 
     except KeyboardInterrupt:
         print("\n  Quitting...")
